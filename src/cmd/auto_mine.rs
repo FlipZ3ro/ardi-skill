@@ -60,8 +60,10 @@ pub fn run() -> Result<()> {
                 "fix_path",
             ),
             66 => (
-                "systemd is not available (typical inside containers without --systemd). Use a host with systemd or drive the cycle interactively.",
-                "manual_cycle",
+                // Kept for back-compat with older install.sh versions; v0.5.15+
+                // installer treats no-systemd as success and recommends `ardi-agent loop`.
+                "systemd not available. Use `ardi-agent loop` for foreground mode (works in Docker / containers / macOS).",
+                "use_loop",
             ),
             _ => (
                 "Installer failed. Re-run with bash -x for verbose output, or open an issue at github.com/awp-worknet/ardi-skill.",
@@ -84,15 +86,22 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
+    // The installer prints the right "next" hint for both systemd and
+    // non-systemd hosts (foreground via `ardi-agent loop`). The exit
+    // code is 0 in both cases — read the script's own stdout for the
+    // exact follow-up command the operator should run.
     Output::success(
-        "auto-mine installed and timer started. Daemon will solve, commit, reveal, and inscribe each epoch unattended.",
+        "auto-mine installed. On systemd hosts a user timer is now running. \
+         On no-systemd hosts (Docker / containers / macOS), run `ardi-agent loop` \
+         in the foreground (or under nohup / tmux) — same pipeline, no timer needed.",
         json!({
-            "installer": installer.to_string_lossy(),
+            "installer":      installer.to_string_lossy(),
             "status_command": "~/.local/share/ardi-auto-mine/status.sh",
             "stop_command":   "~/.local/share/ardi-auto-mine/stop.sh",
+            "foreground":     "ardi-agent loop",
         }),
         Internal {
-            next_action: "monitor".into(),
+            next_action: "monitor_or_run_loop".into(),
             next_command: Some("bash ~/.local/share/ardi-auto-mine/status.sh".into()),
             progress: None,
         },

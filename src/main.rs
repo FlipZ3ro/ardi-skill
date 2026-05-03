@@ -161,8 +161,27 @@ enum Cmd {
     /// Install (or refresh) the unattended mining daemon. Use this instead
     /// of writing your own shell/cron loop — the built-in installer wires
     /// up a systemd user unit that drives commit → reveal → inscribe each
-    /// epoch with the correct serial-nonce ordering. Linux only.
+    /// epoch with the correct serial-nonce ordering. On hosts without
+    /// systemd (Docker / containers / macOS) the installer still sets up
+    /// the runtime files and points you at `ardi-agent loop` for the
+    /// foreground equivalent.
     AutoMine,
+    /// Foreground unattended-mining daemon — the no-systemd fallback for
+    /// `auto-mine`. Spawns one tick at a time (serial, never parallel) and
+    /// blocks until killed. Use this in Docker / Kubernetes / macOS or
+    /// any host without systemd. Run it under nohup / tmux / screen if
+    /// you want to detach.
+    #[command(name = "loop")]
+    Loop {
+        /// Seconds between ticks. Default 90 (matches the systemd timer
+        /// cadence). Clamped to a minimum of 30 to avoid hammering the
+        /// coordinator and the LLM runtime.
+        #[arg(long, default_value_t = 90)]
+        interval: u64,
+        /// Run a single tick and exit (useful for cron / external timers).
+        #[arg(long)]
+        once: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -246,6 +265,10 @@ fn main() {
             cmd::market::run(&cli.server, act)
         }
         Cmd::AutoMine => cmd::auto_mine::run(),
+        Cmd::Loop { interval, once } => cmd::run_loop::run(cmd::run_loop::LoopArgs {
+            interval_sec: Some(interval),
+            once,
+        }),
     };
     if let Err(e) = result {
         log_error!("fatal: {e:#}");

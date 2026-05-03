@@ -1,5 +1,6 @@
 pub mod auto_mine;
 pub mod buy_and_stake;
+pub mod run_loop;
 pub mod claim;
 pub mod commit;
 pub mod commits;

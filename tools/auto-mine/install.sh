@@ -11,10 +11,11 @@
 #   - Auto-starts the timer on success
 #
 # Exit codes:
-#   0  — installed (or already installed) and timer is running
+#   0  — installed (or already installed). Timer running if systemd is
+#        present; otherwise install dir + env are set up and the script
+#        prints `ardi-agent loop` instructions for foreground mode.
 #   64 — no runtime CLI found on PATH (need claude or hermes or openclaw)
 #   65 — ardi-agent missing
-#   66 — systemd not available (e.g. running in a container without it)
 
 set -euo pipefail
 
@@ -31,10 +32,13 @@ command -v ardi-agent >/dev/null || {
   warn "ardi-agent not on PATH — install the skill first"
   exit 65
 }
-command -v systemctl >/dev/null || {
-  warn "systemctl not available — auto-mine requires systemd"
-  exit 66
-}
+
+# systemd is OPTIONAL since v0.5.15 — the foreground `ardi-agent loop`
+# subcommand drives the same ardi-tick.sh pipeline without any timer.
+HAS_SYSTEMD=0
+if command -v systemctl >/dev/null 2>&1 && systemctl --user >/dev/null 2>&1; then
+  HAS_SYSTEMD=1
+fi
 
 # Auto-detect runtime CLI
 RUNTIME=""
@@ -79,27 +83,41 @@ else
   say "env already exists; not overwriting"
 fi
 
-# ── 3. systemd user units ───────────────────────────────────────────
-say "installing systemd user units"
-mkdir -p "$SYSTEMD_USER_DIR"
-sed "s|%h/ardi-skill/tools/auto-mine|$INSTALL_DIR|g" \
-  "$HERE/systemd/ardi-mine.service" > "$SYSTEMD_USER_DIR/ardi-mine.service"
-cp "$HERE/systemd/ardi-mine.timer" "$SYSTEMD_USER_DIR/ardi-mine.timer"
-systemctl --user daemon-reload
-systemctl --user enable ardi-mine.timer 2>&1 | tail -1
+# ── 3. systemd user units (only when systemd is available) ──────────
+if [[ "$HAS_SYSTEMD" -eq 1 ]]; then
+  say "installing systemd user units"
+  mkdir -p "$SYSTEMD_USER_DIR"
+  sed "s|%h/ardi-skill/tools/auto-mine|$INSTALL_DIR|g" \
+    "$HERE/systemd/ardi-mine.service" > "$SYSTEMD_USER_DIR/ardi-mine.service"
+  cp "$HERE/systemd/ardi-mine.timer" "$SYSTEMD_USER_DIR/ardi-mine.timer"
+  systemctl --user daemon-reload
+  systemctl --user enable ardi-mine.timer 2>&1 | tail -1
 
-# ── 4. Auto-start ───────────────────────────────────────────────────
-say "starting timer"
-systemctl --user start ardi-mine.timer
+  say "starting timer"
+  systemctl --user start ardi-mine.timer
 
-# ── 5. Verify ───────────────────────────────────────────────────────
-sleep 1
-if systemctl --user is-active ardi-mine.timer >/dev/null; then
-  say "✓ auto-mine running. Next tick within 90s."
-  say "  watch: journalctl --user -u ardi-mine -f"
-  say "  status: ardi-agent auto-mine status   (or run $INSTALL_DIR/status.sh)"
-  exit 0
+  sleep 1
+  if systemctl --user is-active ardi-mine.timer >/dev/null; then
+    say "✓ auto-mine running. Next tick within 90s."
+    say "  watch:  journalctl --user -u ardi-mine -f"
+    say "  status: $INSTALL_DIR/status.sh"
+    exit 0
+  else
+    warn "timer failed to start; see: systemctl --user status ardi-mine.timer"
+    exit 1
+  fi
 else
-  warn "timer failed to start; see: systemctl --user status ardi-mine.timer"
-  exit 1
+  # No-systemd path: env + symlink are set up, hand off to `ardi-agent loop`.
+  say "✓ auto-mine files installed (no systemd detected — foreground mode)"
+  say ""
+  say "  This host has no systemd (likely Docker / Kubernetes / macOS)."
+  say "  Run the foreground daemon instead:"
+  say ""
+  say "      ardi-agent loop                                  # blocks in current shell"
+  say "      nohup ardi-agent loop > ardi.log 2>&1 &          # detach + log to file"
+  say "      tmux new -d -s ardi 'ardi-agent loop'            # detach in tmux session"
+  say ""
+  say "  status: $INSTALL_DIR/status.sh"
+  say "  stop:   pkill -f 'ardi-agent loop'"
+  exit 0
 fi
