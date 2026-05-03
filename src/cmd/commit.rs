@@ -21,7 +21,7 @@ use crate::client::ApiClient;
 use crate::output::{Internal, Output};
 use crate::state::{CommitStatus, PendingCommit, State};
 use crate::tx;
-use crate::log_info;
+use crate::{log_error, log_info};
 
 pub struct CommitArgs {
     pub epoch_id: Option<u64>, // if None, use current
@@ -290,31 +290,93 @@ pub fn run(server_url: &str, args: CommitArgs) -> Result<()> {
     let data = tx::calldata_commit(epoch_id, args.word_id, hash, stakers.clone());
     let tx_obj = tx::build_tx(&agent, &to, data, tx::COMMIT_BOND_WEI, 200_000)?;
 
-    let tx_hash = tx::send_and_wait(&tx_obj).context("send commit tx")?;
-    log_info!("commit: tx submitted {tx_hash}");
+    // v0.5.16 — two-phase commit save (WAL pattern).
+    //
+    // Pre-v0.5.16 this was a single `send_and_wait` followed by load →
+    // put → save AFTER the receipt landed. That left a (small but real)
+    // window between "tx mined" and "state saved" where a process kill
+    // would leave a commit on chain with no local salt → reveal
+    // impossible → bond forfeited.
+    //
+    // Now we:
+    //   1. Broadcast (returns tx_hash immediately, no receipt wait)
+    //   2. WAL save inside with_lock: status=Pending + the tx_hash
+    //      → durable record before we block on the chain
+    //   3. Wait for receipt
+    //   4. Promote to Committed inside with_lock (or Failed on revert)
+    //
+    // The whole thing also serializes cleanly with concurrent commits
+    // for OTHER (epoch, word) pairs because every state mutation is
+    // inside `State::with_lock` — fixes the load-modify-save race that
+    // ate commits past epoch 9 in v0.5.12 (community report 2026-05-04).
+    let tx_hash = crate::wallet::send_tx(&tx_obj).context("broadcast commit tx")?;
+    log_info!("commit: tx broadcast {tx_hash} (waiting receipt)");
 
-    // Persist BEFORE waiting receipt — losing this state means we forget the
-    // salt and can never reveal, which would forfeit the bond. Better to
-    // record optimistically; if tx reverts we can update status to Failed.
-    let mut st = State::load()?;
-    st.put(PendingCommit {
-        epoch_id,
-        word_id: args.word_id,
-        answer: args.answer.clone(),
-        salt_hex: format!("0x{}", hex::encode(salt)),
-        agent: agent_str.clone(),
-        commit_tx: tx_hash.clone(),
-        commit_hash: format!("0x{}", hex::encode(hash)),
-        committed_at: chrono::Utc::now().timestamp(),
-        language,
-        power,
-        language_id,
-        status: CommitStatus::Committed,
-        reveal_tx: None,
-        inscribe_tx: None,
-        token_id: None,
-    });
-    st.save()?;
+    let answer_for_state = args.answer.clone();
+    let salt_hex = format!("0x{}", hex::encode(salt));
+    let commit_hash_hex = format!("0x{}", hex::encode(hash));
+    let agent_str_for_state = agent_str.clone();
+    let language_for_state = language.clone();
+    let tx_hash_for_state = tx_hash.clone();
+    State::with_lock(|st| {
+        st.put(PendingCommit {
+            epoch_id,
+            word_id: args.word_id,
+            answer: answer_for_state,
+            salt_hex,
+            agent: agent_str_for_state,
+            commit_tx: tx_hash_for_state,
+            commit_hash: commit_hash_hex,
+            committed_at: chrono::Utc::now().timestamp(),
+            language: language_for_state,
+            power,
+            language_id,
+            status: CommitStatus::Pending,
+            reveal_tx: None,
+            inscribe_tx: None,
+            token_id: None,
+        });
+        Ok(())
+    })?;
+
+    // Now block on the receipt. tx::wait_receipt returns (success, block).
+    // On a chain revert (status != 0x1) we mark Failed so `commits` shows
+    // the truth instead of leaving a stale Pending row forever.
+    let (success, block) = match tx::wait_receipt(&tx_hash, 90) {
+        Ok(r) => r,
+        Err(e) => {
+            // Receipt timed out — we don't actually know if the tx made
+            // it. Leave the state at Pending; user can `cast tx <hash>`
+            // to verify and re-run commit (which will see the Pending
+            // entry and short-circuit the idempotency check).
+            log_error!("commit: receipt wait failed for {tx_hash}: {e}");
+            return Err(e).context("wait_receipt for commit");
+        }
+    };
+    if !success {
+        let tx_hash_for_fail = tx_hash.clone();
+        let _ = State::with_lock(|st| {
+            if let Some(e) = st.get_mut(epoch_id, args.word_id) {
+                e.status = CommitStatus::Failed;
+            }
+            let _ = tx_hash_for_fail; // captured for the closure scope
+            Ok(())
+        });
+        return Err(anyhow!(
+            "commit tx {tx_hash} REVERTED on chain (block {block}). \
+             Marked Failed locally. Common causes: CommitWindowClosed, \
+             InsufficientStake, AlreadyCommitted, EpochUnknown. Decode revert: \
+             cast call {to} <input> --from {agent_str} --rpc-url https://mainnet.base.org",
+            to = format!("0x{:x}", to),
+        ));
+    }
+    log_info!("commit: tx confirmed {tx_hash} (block {block})");
+    State::with_lock(|st| {
+        if let Some(e) = st.get_mut(epoch_id, args.word_id) {
+            e.status = CommitStatus::Committed;
+        }
+        Ok(())
+    })?;
 
     let mut data = json!({
         "epoch_id": epoch_id,

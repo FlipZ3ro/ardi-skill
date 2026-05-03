@@ -17,7 +17,9 @@ pub fn run(server_url: &str, epoch_id: u64, word_id: u64) -> Result<()> {
     let agent_str = get_address()?;
     let agent = Address::from_str(&agent_str)?;
 
-    let mut st = State::load()?;
+    // Read-only load — we only mutate state at the end (after tx
+    // confirms), and that mutation goes through State::with_lock.
+    let st = State::load()?;
     let entry = match st.get(epoch_id, word_id).cloned() {
         Some(e) => e,
         None => {
@@ -124,11 +126,16 @@ pub fn run(server_url: &str, epoch_id: u64, word_id: u64) -> Result<()> {
     };
     log_info!("reveal: tx submitted {tx_hash}");
 
-    if let Some(e) = st.get_mut(epoch_id, word_id) {
-        e.status = CommitStatus::Revealed;
-        e.reveal_tx = Some(tx_hash.clone());
-    }
-    st.save()?;
+    // Atomic state update under flock — concurrent ticks (e.g. another
+    // reveal in the same auto-mine cycle) won't lose this write.
+    let tx_hash_for_state = tx_hash.clone();
+    State::with_lock(|st| {
+        if let Some(e) = st.get_mut(epoch_id, word_id) {
+            e.status = CommitStatus::Revealed;
+            e.reveal_tx = Some(tx_hash_for_state);
+        }
+        Ok(())
+    })?;
 
     let mut data = json!({
         "epoch_id": epoch_id,

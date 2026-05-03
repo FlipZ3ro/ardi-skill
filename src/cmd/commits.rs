@@ -30,7 +30,6 @@ fn token_url(nft_addr: &str, token_id: u64) -> String {
 }
 
 pub fn run(_server_url: &str) -> Result<()> {
-    let mut st = State::load()?;
     let now = chrono::Utc::now().timestamp();
 
     // Backfill: any Inscribed/Won row that's missing token_id was written by
@@ -39,16 +38,22 @@ pub fn run(_server_url: &str) -> Result<()> {
     // without an RPC call. This eliminates the "ardi-agent commits says
     // token_id:null but ardi-agent status / chain says #1869 is mine" lie
     // that misled testers into thinking they hadn't won.
-    let mut backfilled = 0;
-    for c in st.pending.values_mut() {
-        if matches!(c.status, CommitStatus::Inscribed | CommitStatus::Won) && c.token_id.is_none() {
-            c.token_id = Some(c.word_id + 1);
-            backfilled += 1;
+    //
+    // Wrap in `with_lock` so a concurrent commit/reveal/inscribe doesn't
+    // race the backfill write. The closure no-ops on its way out if no
+    // rows needed repair, so the lock cost on every `commits` call is
+    // just one fsync's worth.
+    let st = State::with_lock(|st| {
+        let mut backfilled = 0;
+        for c in st.pending.values_mut() {
+            if matches!(c.status, CommitStatus::Inscribed | CommitStatus::Won) && c.token_id.is_none() {
+                c.token_id = Some(c.word_id + 1);
+                backfilled += 1;
+            }
         }
-    }
-    if backfilled > 0 {
-        st.save()?;
-    }
+        let _ = backfilled; // tracked only for symmetry with prior log line
+        Ok(st.clone())
+    })?;
 
     // Pre-fetch commitDeadline for each epoch with at least one Committed
     // row, so we can surface `next_reveal_eligible_at` (= commitDeadline +

@@ -17,7 +17,11 @@ pub fn run(server_url: &str, epoch_id: u64, word_id: u64) -> Result<()> {
     let agent_str = get_address()?;
     let agent = Address::from_str(&agent_str)?;
 
-    let mut st = State::load()?;
+    // Read-only load — every state mutation in this command goes through
+    // State::with_lock right before that branch returns. Concurrent
+    // ticks (e.g. parallel `inscribe` calls for different (epoch,word))
+    // will serialize cleanly on the per-agent flock.
+    let st = State::load()?;
     let entry = match st.get(epoch_id, word_id).cloned() {
         Some(e) => e,
         None => {
@@ -135,10 +139,12 @@ pub fn run(server_url: &str, epoch_id: u64, word_id: u64) -> Result<()> {
             // No correct revealers — VRF will never fire for this wordId.
             // Mark Lost so `commits` stops suggesting inscribe + future
             // inscribe calls short-circuit with the right message.
-            if let Some(e) = st.get_mut(epoch_id, word_id) {
-                e.status = CommitStatus::Lost;
-            }
-            st.save()?;
+            State::with_lock(|st| {
+                if let Some(e) = st.get_mut(epoch_id, word_id) {
+                    e.status = CommitStatus::Lost;
+                }
+                Ok(())
+            })?;
             Output::success(
                 "No correct revealers for this riddle — your answer didn't match the canonical hash. Bond was refunded on reveal; nothing more to do here.",
                 json!({
@@ -184,10 +190,12 @@ pub fn run(server_url: &str, epoch_id: u64, word_id: u64) -> Result<()> {
         return Ok(());
     }
     if winner != agent {
-        if let Some(e) = st.get_mut(epoch_id, word_id) {
-            e.status = CommitStatus::Lost;
-        }
-        st.save()?;
+        State::with_lock(|st| {
+            if let Some(e) = st.get_mut(epoch_id, word_id) {
+                e.status = CommitStatus::Lost;
+            }
+            Ok(())
+        })?;
         Output::success(
             format!("Better luck next time — winner is {winner:?}, not us."),
             json!({
@@ -220,12 +228,15 @@ pub fn run(server_url: &str, epoch_id: u64, word_id: u64) -> Result<()> {
     // `status=inscribed token_id=null` and the success line was wrong:
     // `Ardinal #3` instead of `Ardinal #1869`. Two-line fix.
     let token_id = word_id + 1;
-    if let Some(e) = st.get_mut(epoch_id, word_id) {
-        e.status = CommitStatus::Inscribed;
-        e.inscribe_tx = Some(tx_hash.clone());
-        e.token_id = Some(token_id);
-    }
-    st.save()?;
+    let tx_hash_for_state = tx_hash.clone();
+    State::with_lock(|st| {
+        if let Some(e) = st.get_mut(epoch_id, word_id) {
+            e.status = CommitStatus::Inscribed;
+            e.inscribe_tx = Some(tx_hash_for_state);
+            e.token_id = Some(token_id);
+        }
+        Ok(())
+    })?;
 
     // Hand the LLM a clickable URL so the operator can verify on Basescan
     // immediately — without it, testers had to compose `cast call` to

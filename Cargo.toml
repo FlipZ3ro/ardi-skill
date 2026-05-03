@@ -1,6 +1,6 @@
 [package]
 name = "ardi-agent"
-version = "0.5.15"
+version = "0.5.16"
 edition = "2021"
 description = "CLI agent for AWP Ardi WorkNet — solve riddles, mint Ardinal NFTs"
 license = "MIT"
@@ -26,6 +26,11 @@ hex = "0.4"
 rand = "0.8"
 ctrlc = "3"
 libc = "0.2"
+# v0.5.16: cross-platform advisory file locking for state.json. Pure
+# Rust, used by cargo + many other crates — wraps flock on Unix and
+# LockFileEx on Windows. Keeps state mutations safe against parallel
+# `ardi-agent commit` invocations (auto-mine ticks, manual fan-out).
+fs2 = "0.4"
 # v0.4.0: dropped alloy-consensus / alloy-signer / alloy-signer-local /
 # alloy-network / alloy-rlp / alloy-dyn-abi. All signing now goes through
 # `awp-wallet send-tx` and `awp-wallet sign-typed-data`; ardi-agent never
