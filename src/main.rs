@@ -64,7 +64,7 @@ enum Cmd {
     /// One-command path: ETH → AWP swap (Uniswap V3 → Aerodrome CL),
     /// then auto-lock into veAWP and allocate to your agent.
     /// Recommended for new users with ETH but no AWP. Topping up an
-    /// existing balance ("补差额") is the default — only buys what's
+    /// existing balance (top-up) is the default — only buys what's
     /// missing to reach minStake.
     BuyAndStake {
         /// Lock duration in days (default 3, max 1460 = 4 years).
@@ -158,6 +158,11 @@ enum Cmd {
         #[command(subcommand)]
         action: MarketCmd,
     },
+    /// Install (or refresh) the unattended mining daemon. Use this instead
+    /// of writing your own shell/cron loop — the built-in installer wires
+    /// up a systemd user unit that drives commit → reveal → inscribe each
+    /// epoch with the correct serial-nonce ordering. Linux only.
+    AutoMine,
 }
 
 #[derive(Subcommand, Debug)]
@@ -240,6 +245,7 @@ fn main() {
             };
             cmd::market::run(&cli.server, act)
         }
+        Cmd::AutoMine => cmd::auto_mine::run(),
     };
     if let Err(e) = result {
         log_error!("fatal: {e:#}");

@@ -1,3 +1,4 @@
+pub mod auto_mine;
 pub mod buy_and_stake;
 pub mod claim;
 pub mod commit;

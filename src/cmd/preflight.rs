@@ -176,21 +176,29 @@ pub fn run(server_url: &str) -> Result<()> {
     }
 
     Output::success(
-        format!("Preflight passed. Agent {address} is ready to mine."),
+        format!(
+            "Preflight passed. Agent {address} is ready to mine. \
+             For unattended 24/7 mining, run `ardi-agent auto-mine` (Linux, installs \
+             a systemd timer). For a single interactive cycle, run `ardi-agent context`. \
+             DO NOT write your own shell/cron loop — it will break serial-nonce ordering \
+             and silently lose ~14 of 15 commits per epoch."
+        ),
         json!({
             "address": address,
             "registered": reg.registered,
             "balance_eth": gas_check.balance_eth,
             "stake_eligible": eligible,
+            "next_paths": {
+                "unattended": "ardi-agent auto-mine",
+                "interactive": "ardi-agent context",
+            },
         }),
         Internal {
+            // Default to the interactive path so existing automation that
+            // executes _internal.next_command verbatim keeps working. The
+            // auto-mine path is surfaced via the message + data.next_paths
+            // so the LLM can pick it when the operator's intent is "afk".
             next_action: "ready".into(),
-            // Was "ardi-agent mine" — that subcommand never existed in the
-            // skill (the auto-mine helper lives in `tools/auto-mine/` as a
-            // separate systemd unit). LLM agents that obey
-            // _internal.next_command verbatim hit "unrecognized subcommand".
-            // Send them to `context` instead, which is the actual
-            // entry-point for the per-epoch loop.
             next_command: Some("ardi-agent context".into()),
             progress: Some("5/5".into()),
         },
