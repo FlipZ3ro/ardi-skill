@@ -7,6 +7,7 @@ pub mod commits;
 pub mod context;
 pub mod gas;
 pub mod inscribe;
+pub mod pending;
 pub mod preflight;
 pub mod repair;
 pub mod reveal;

@@ -135,13 +135,19 @@ enum Cmd {
         #[arg(long)]
         token_id: u64,
     },
-    /// v3: claim accumulated $ardi rewards from EmissionDistributor.
-    /// Pass --token-id repeatedly to settle each held active NFT first;
-    /// any prior settled balance is paid out regardless.
+    /// v3.2: claim accumulated $ardi rewards from EmissionDistributor.
+    /// Pass --token-id repeatedly to claim from specific NFTs; OR pass
+    /// no flags at all to auto-fetch every NFT this agent owns from the
+    /// coordinator and claim across all of them in one tx.
     Claim {
         #[arg(long = "token-id")]
         token_ids: Vec<u64>,
     },
+    /// v3.2: report claimable $ardi without sending any tx. Auto-fetches
+    /// the agent's owned NFTs from the coordinator. Use this BEFORE
+    /// `claim` to confirm with the operator how much they're about to
+    /// receive (pending = sum across NFTs).
+    Pending {},
     /// v3: transfer an Ardinal NFT from the agent's wallet to another
     /// address (typically the user's MetaMask / main wallet) so the new
     /// owner can repair / claim from the browser. Reverts up-front if a
@@ -254,6 +260,7 @@ fn main() {
         Cmd::Inscribe { epoch, word_id } => cmd::inscribe::run(&cli.server, epoch, word_id),
         Cmd::Repair { token_id } => cmd::repair::run(&cli.server, token_id),
         Cmd::Claim { token_ids } => cmd::claim::run(&cli.server, token_ids),
+        Cmd::Pending {} => cmd::pending::run(&cli.server),
         Cmd::Transfer { token_id, to } => cmd::transfer::run(&cli.server, token_id, to),
         Cmd::Market { action } => {
             let act = match action {

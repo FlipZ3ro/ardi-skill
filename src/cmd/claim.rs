@@ -1,14 +1,17 @@
 // claim — pull accumulated $ardi rewards from the EmissionDistributor.
 //
-// v3: every active NFT accrues emission via accPerShare. The holder's pending
-// balance includes (a) anything settled by prior transfer/deactivate hooks,
-// plus (b) the current rolling accrual on each token they pass in. Empty
-// list is fine — claims just the settled balance.
+// v3.2 (mint-on-claim, reward-follows-NFT):
+//   - reward is attributed per tokenId, not per address
+//   - claim verifies ownerOf == msg.sender for each tokenId
+//   - distributor calls external WorknetManager.batchMint to mint fresh
+//     $ardi to the agent (no pre-funding; no transferFrom)
+//   - if no token_ids are passed, we auto-fetch every NFT this agent owns
+//     from the coordinator and include all of them in one claim tx
 
 use anyhow::{anyhow, Context, Result};
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::str::FromStr;
 
 use crate::auth::get_address;
@@ -23,7 +26,7 @@ pub fn run(server_url: &str, token_ids: Vec<u64>) -> Result<()> {
     let agent = Address::from_str(&agent_str)?;
     let api = ApiClient::new(server_url)?;
 
-    let cfg: serde_json::Value = api
+    let cfg: Value = api
         .get_json("/v1/chain/contracts")
         .or_else(|_| api.get_json("/v1/health"))
         .unwrap_or_default();
@@ -35,6 +38,30 @@ pub fn run(server_url: &str, token_ids: Vec<u64>) -> Result<()> {
             )
         })?;
     let dist_addr = Address::from_str(&dist_addr)?;
+
+    // v3.2 default: claim across every NFT the agent owns. Operator can
+    // still narrow with --token-id if they want.
+    let token_ids: Vec<u64> = if token_ids.is_empty() {
+        let state: Option<Value> = api
+            .try_get_json(&format!("/v1/agent/{agent_str}/state"))
+            .unwrap_or(None);
+        let owned: Vec<u64> = state
+            .as_ref()
+            .and_then(|v| v.get("mints").and_then(|m| m.as_array()))
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| m.get("token_id").and_then(|v| v.as_u64()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        log_info!(
+            "claim: auto-fetched {} owned NFTs from coord",
+            owned.len()
+        );
+        owned
+    } else {
+        token_ids
+    };
 
     let token_ids_u: Vec<U256> = token_ids.iter().map(|&t| U256::from(t)).collect();
 
@@ -65,7 +92,10 @@ pub fn run(server_url: &str, token_ids: Vec<u64>) -> Result<()> {
     }
 
     let data = tx::calldata_claim(token_ids_u);
-    let tx_obj = tx::build_tx(&agent, &dist_addr, data, 0, 200_000)?;
+    // v3.2 claim: ownerOf check per token + batchMint external call. Gas
+    // scales with nft count; budget 200K base + 100K per token.
+    let gas_limit: u64 = 200_000 + 100_000 * token_ids.len() as u64;
+    let tx_obj = tx::build_tx(&agent, &dist_addr, data, 0, gas_limit)?;
     let claim_hash = tx::send_and_wait(&tx_obj).context("send claim tx")?;
 
     Output::success(
