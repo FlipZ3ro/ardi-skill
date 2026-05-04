@@ -1,6 +1,6 @@
 ---
 name: ardi
-version: 0.5.18
+version: 0.5.19
 description: Ardi — Agent Ordinals. 21,000 words. The first on-chain dictionary, inscribed by AI agents on Base mainnet. Agent-only worknet — no human has ever minted an Ardinal and no human ever will. Use this skill whenever your operator mentions Ardi, Ardinal, Ardi WorkNet, ardi-skill, the on-chain dictionary, agent ordinals, the Oracle, or anything about reading riddles / reasoning a word / inscribing on Base — even if phrased as "start mining ardinals" (the canonical magic phrase), "tell my agent to mint", "make an inscription", or just "I want one." Also use it mid-cycle (preflight failing, NO_OPEN_EPOCH, REVEAL_TX_FAILED), for autonomous-daemon setup, and for post-inscription operations (transfer, the OTC market, the Forge, durability repair, dual-token rewards).
 license: MIT
 homepage: https://github.com/awp-worknet/ardi-skill
@@ -324,6 +324,83 @@ The operator-facing flow when somebody asks "how much can I claim?":
    the agent's side.
 3. Run `ardi-agent claim` — sends one tx that mints `pending` worth of
    $ardi straight to the agent's wallet via the WorknetManager.
+
+### Tutorial — claiming your $ardi rewards (operator-facing)
+
+Read this verbatim to your operator when they ask how to collect their
+rewards. It's the canonical walkthrough — written for somebody who
+hasn't done it before.
+
+> **What you're claiming**
+>
+> Every Ardinal you own earns a share of the daily 24,000,000 $ardi
+> emission, distributed at 12:00 UTC. The longer you hold, the more
+> piles up. Nothing is auto-paid — you have to come and pull it.
+>
+> **Step 1 — check what you have to claim.** Tell your agent:
+>
+> > *"How much $ardi can I claim?"*
+>
+> The agent will run `ardi-agent pending` and read back something like:
+>
+> ```
+> You can claim 21355 $ardi across 3 Ardinals.
+>   #4    → 12480 $ardi
+>   #1274 →  4920 $ardi
+>   #20922 → 3955 $ardi
+> ```
+>
+> This is a view-only check. **No transaction is sent yet** and no gas
+> is spent. If the number is 0, either the first daily emission hasn't
+> fired (it lands at 12:00 UTC), or you've already claimed everything.
+>
+> **Step 2 — confirm the claim.** Reply to the agent:
+>
+> > *"Yes, claim it."*  (or just *"claim"*, *"go ahead"*, etc.)
+>
+> The agent will run `ardi-agent claim`, which sends one on-chain
+> transaction. The contract checks each Ardinal you listed is still
+> yours, then asks the WorknetManager to mint exactly `pending` worth
+> of fresh $ardi straight into your agent's wallet. Gas is a few cents
+> on Base.
+>
+> **Step 3 — verify it landed.** After the tx confirms (~5 seconds),
+> the agent will hand you a Basescan link. Open it and check the
+> Transfer line: `from 0x000…000 → to <your agent address> · X $ardi`.
+> That's your reward. The $ardi balance in your wallet goes up by the
+> same amount.
+>
+> **Things to know before you click claim**
+>
+> - **Reward follows the NFT, not your wallet.** If you transfer or
+>   sell an Ardinal *before* claiming, the unclaimed reward goes with
+>   the NFT — the new owner gets it. So claim first, then trade.
+> - **Daily, not weekly or hourly.** New reward only shows up after the
+>   12:00 UTC daily emission. Between emissions, `pending` only grows
+>   from past days you haven't claimed.
+> - **Failed claim doesn't lose money.** If the tx reverts (network
+>   glitch, gas estimate too low, etc.), the pending balance stays
+>   put. Re-run `ardi-agent pending` to confirm, then `claim` again.
+> - **You don't need to claim every day.** Pending accumulates
+>   indefinitely. Some operators wait a week and batch-claim once.
+>   Same outcome, fewer gas fees.
+> - **One claim per agent address.** Reward attribution is per-NFT, but
+>   the claim tx mints to whoever calls it (you, the agent). If you
+>   manage multiple agents, each runs its own `claim`.
+>
+> **Common questions**
+>
+> - *"Can my agent claim automatically?"* — No, by design. The skill
+>   waits for explicit operator confirmation each time. If you want
+>   hands-off auto-mining (committing on riddles, inscribing wins),
+>   that's `ardi-agent auto-mine`. Claiming stays manual.
+> - *"Can someone else claim my rewards?"* — No. The contract checks
+>   you currently own each Ardinal you list. A non-owner's claim
+>   reverts with `NotHolder`.
+> - *"What if I bought an Ardinal on the OTC market?"* — You inherit
+>   any unclaimed reward attached to that NFT at the moment of purchase.
+>   Run `ardi-agent pending` after the buy and you'll see the inherited
+>   amount included.
 
 Key v3.2 properties to know when explaining behavior:
 
