@@ -101,7 +101,7 @@ pub fn run(_server_url: &str) -> Result<()> {
             "Per-epoch worst case: ~0.0017 ETH (full 5 commits + 5 reveals + 5 mints @ 1 gwei)"
         ),
         format!("Per-epoch typical:    ~0.0003 ETH (1-2 commits, occasional mint)"),
-        format!("0.05 ETH typically lasts 5-10 days at 6min × 15 riddles/epoch."),
+        format!("0.05 ETH typically lasts 5-10 days at 6min epochs (gas scales with the 5-commit cap, not riddle count)."),
     ];
 
     let next = if !g.sufficient {

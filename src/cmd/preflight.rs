@@ -181,7 +181,7 @@ pub fn run(server_url: &str) -> Result<()> {
              For unattended 24/7 mining, run `ardi-agent auto-mine` (Linux, installs \
              a systemd timer). For a single interactive cycle, run `ardi-agent context`. \
              DO NOT write your own shell/cron loop — it will break serial-nonce ordering \
-             and silently lose ~14 of 15 commits per epoch."
+             and silently lose almost every commit (only one lands per concurrent batch)."
         ),
         json!({
             "address": address,
