@@ -22,9 +22,27 @@ command -v claude >/dev/null || { echo "claude not on PATH" >&2; exit 3; }
 # --max-turns 30: hard cap on tool-use turns so a stuck loop can't burn
 #   tokens forever (a healthy tick uses ~10 turns)
 # Stream output so journald shows progress in real time.
-exec claude \
+mkdir -p "$HOME/.ardi-agent"
+
+# Sonnet faster than Opus (~3-5x). For 90s commit window, we need speed.
+# Override via env var if you want a different model:
+#   export ARDI_CLAUDE_MODEL=claude-opus-4-7
+MODEL="${ARDI_CLAUDE_MODEL:-claude-sonnet-4-6}"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Pipe stream-json through prettifier for human-readable log lines.
+# Raw stream-json saved to .raw.log for debugging if needed.
+RAW_LOG="$HOME/Library/Logs/ardi-mine.raw.log"
+
+claude \
   --print \
-  --max-turns 30 \
+  --max-turns 25 \
+  --model "$MODEL" \
+  --dangerously-skip-permissions \
+  --add-dir "$HOME/.ardi-agent" \
   --output-format stream-json \
   --verbose \
-  < "$PROMPT_FILE"
+  < "$PROMPT_FILE" \
+  | tee -a "$RAW_LOG" \
+  | python3 "$HERE/log-prettifier.py"
